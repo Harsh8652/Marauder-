@@ -14,5 +14,7 @@ void marauderLog(const char* tag, const char* message);
 // Sizes reported for the UI / CLI.
 unsigned long logInternalCapBytes();
 unsigned long long logSdCapBytes();   // 0 when no SD card
+// True when a card was found at boot and the SD log is actually writing to it.
+bool logSdPresent();
 
 #endif  // MARAUDER_OLED128X64

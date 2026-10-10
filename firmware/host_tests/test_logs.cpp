@@ -29,6 +29,26 @@ static void testRotationKeepsCap() {
   std::printf("ok rotation: %zu segments kept, newest intact\n", st.segs.size());
 }
 
+static void testFirstRotationDoesNotDoubleSegmentZero() {
+  // Regression: advance() used to treat a fresh log as "not started", so the first
+  // rotation kept writing into segment 0. Segment 0 then held 2x its slice and the log
+  // stayed over its cap for the whole life of the card (resume() trims by segment COUNT,
+  // never by bytes, so the oversized file was never noticed).
+  MemStore st;
+  RotatingLog log(st, 64, 8);
+  size_t written = 0;
+  for (int i = 0; i < 30; i++) {
+    const std::string rec = std::string("0123456789") + std::to_string(i);
+    written += rec.size() + 1;   // +1 for the newline
+    assert(log.write(rec));
+  }
+  for (auto& kv : st.segs) assert(kv.second.size() <= 64);
+  assert(all(st).size() == written);
+  assert(log.oldest() == 0 && log.newest() == 5);    // ~380 B spread over 6 x 64 B
+  assert(st.segs.size() == 6);
+  std::printf("ok rotation: fresh log uses %zu segments, none over its 64 B slice\n", st.segs.size());
+}
+
 static void testNoLossAcrossSegments() {
   MemStore st;
   RotatingLog log(st, 10, 100);
@@ -70,6 +90,7 @@ static void testInternal256K() {
 
 int main() {
   testRotationKeepsCap();
+  testFirstRotationDoesNotDoubleSegmentZero();
   testNoLossAcrossSegments();
   testResumeTrimsToCap();
   testCapFromCardSize();

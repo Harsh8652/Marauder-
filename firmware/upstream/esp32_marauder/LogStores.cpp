@@ -102,6 +102,8 @@ unsigned long logInternalCapBytes() { return kInternalSegBytes * kInternalSegs; 
 
 unsigned long long logSdCapBytes() { return gSdCap; }
 
+bool logSdPresent() { return gSd != nullptr; }
+
 void logInit() {
   // Internal log (SPIFFS). The cap is fixed at 256 KB.
   if (SPIFFS.begin(true)) {
@@ -111,24 +113,26 @@ void logInit() {
     if (scanRange(SPIFFS, kInternalDir, lo, hi)) gInternal->resume(lo, hi);
   }
 
-  // SD log (optional). The cap is the card's real volume size, all of it (no reserve).
+  // SD log (optional). The cap is the card's volume size minus kSdReservePercent, so FAT
+  // still has room to move clusters around when the log is at its limit.
   if (SD.cardType() != CARD_NONE) {
-    gSdCap = SD.totalBytes();
-    uint32_t maxSegs = computeMaxSegments(gSdCap, kSdSegBytes, kSdReservePercent);
+    const uint64_t cap = SD.totalBytes();
+    const uint32_t maxSegs = computeMaxSegments(cap, kSdSegBytes, kSdReservePercent);
+    // A card smaller than one segment gets no log at all, and must not report a cap either:
+    // the UI shows logSdCapBytes() as "logging to SD".
     if (maxSegs > 0) {
+      gSdCap = cap;
       gSdStore = new FsLogStore(SD, kSdDir);
       gSd = new RotatingLog(*gSdStore, kSdSegBytes, maxSegs);
       uint32_t lo = 0, hi = 0;
       if (scanRange(SD, kSdDir, lo, hi)) gSd->resume(lo, hi);
     }
-  } else {
-    gSdCap = 0;
   }
 }
 
 void marauderLog(const char* tag, const char* message) {
   char line[256];
-  std::snprintf(line, sizeof(line), "[%lu] %s: %s", millis(), tag, message);
+  std::snprintf(line, sizeof(line), "[%lu] %s: %s", static_cast<unsigned long>(millis()), tag, message);
   if (gInternal) gInternal->write(line);
   if (gSd) gSd->write(line);
 }

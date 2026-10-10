@@ -3,10 +3,32 @@
 Sketch folder: `firmware/upstream/esp32_marauder/` (open `esp32_marauder.ino`).
 Board target is already selected in `configs.h`: `#define MARAUDER_ESP32_OLED`.
 
+## 0. Before you open the IDE
+```sh
+sh firmware/host_tests/run_tests.sh        # ~10 s, needs only g++ + python3
+```
+That compiles and runs the OLED driver and the log store against a fake I2C bus, a fake panel
+and a fake filesystem, checks the pin map and `partitions.csv`, and lints every `#if` in the
+tree for this board. It will not prove the whole sketch builds (that is step 3), but it does
+catch the class of mistakes that waste a flash cycle: a `tft.<method>()` the OLED driver does not
+have, a typo'd `#ifdef MARAUDER_...` that silently deletes your code, two board targets enabled
+at once, a log cap that overshoots the partition.
+
+Want to see the menu animation before wiring anything?
+```sh
+sh firmware/tools/render_preview.sh /tmp/oled-preview   # writes /tmp/oled-preview/slide.gif
+```
+It uses the real driver, so it shows the real pacing (~20 fps, ~7 frames per transition).
+
 ## 1. Arduino IDE
 - Install Arduino IDE 2.x.
 - Boards Manager: install **esp32 by Espressif Systems, version 3.3.4**
   (the same core upstream CI uses for classic ESP32 builds).
+
+The Arduino IDE is the supported route for this board. `upstream/platformio.ini` only carries
+upstream's `[env:native]` host tests - there is no PlatformIO environment for the OLED build,
+because an unverifiable one is worse than none. If you want to add it, the settings that matter
+are in steps 1 and 3 here, and `configs.h` already selects the board (no `-D` flag needed).
 
 ## 2. Libraries (Library Manager, or ZIP from GitHub)
 Required:
@@ -61,4 +83,34 @@ Power the OLED and SD card from 3.3 V. Do not connect GPIOs 0, 1, 3, 6–11, or 
 
 ## 7. Menu animation
 Menus slide on page changes: forward navigation slides in from the right, back navigation from
-the left (about 300 ms). The animation runs in the display flush and does not block the main loop.
+the left (300 ms). The animation runs inside `display()`, which the main loop calls once per
+pass, so it never blocks the loop on purpose.
+
+Numbers measured by `host_tests/test_display.cpp` against a simulated 400 kHz bus:
+
+| thing | cost |
+|---|---|
+| one full 128x64 frame | 1024 B = 88 transactions = **28 ms** |
+| one 8-row page (a text line, the menu cursor) | 128 B = 11 transactions = **3.5 ms** |
+| slide frames | paced at **20 fps** (~7 frames per transition) |
+| bus share while sliding | ~55 % of the main loop |
+
+The flush is blocking (no DMA), so a full-frame repaint at 30 fps would have left the Wi-Fi
+capture callbacks only ~20 % of the loop; that is why slides are paced at 20 fps while
+everything else is cheap enough to stay at 30. If you see tearing or a stutter on the panel,
+change `kSlideFrameIntervalMs` / `kFrameIntervalMs` in `esp32_marauder/OledSlide.h`.
+
+## 8. First boot checklist
+1. Serial monitor at 115200: `ESP-IDF version is: ...`, then `Marauder v1.18.0` start-up lines.
+   No display and no serial output at all is almost always a boot-mode or wiring problem, not code.
+2. The splash should read `ESP32 Marauder` / `v1.18.0` / `ESP32 OLED`. The third line is
+   `HARDWARE_NAME` - if it says `POOM`, you are looking at a different build than this tree.
+3. Panel completely dark? Check SDA/SCL are on 21/22, that the module is a 0x3C part (some
+   128x64 modules ship with a 0x3D link), and that it is powered from 3.3 V. The driver does not hang on a missing panel (there is a host test for that),
+   so boot still continues and the log still fills up.
+4. Buttons: Up/Down move the highlight, OK selects, Left goes back (and slides the other way),
+   B is the editor cancel key. GPIO 16/17 are the UART2 RTS/CTS pins, which is fine as buttons.
+5. Logs: press OK into a menu, then read `/logs/00000000.log` on SPIFFS (or `/marauder_logs/` on
+   the card). Boot writes two records, one of which repeats the pin map and the SD state:
+   `boot: oled i2c 21/22 btn 13/14/17/16/25/26 sd log 16106127360 B`. If it says `sd none`,
+   the card was not seen; the internal log keeps working either way.

@@ -137,9 +137,109 @@ Round 4 changes:
 - `PoomDisplay.cpp` now includes `configs.h`. Without it, Arduino IDE builds would miss `OLED_SDA/SCL`
   and the whole file (upstream CI avoids this by passing the board as a `-D` flag).
 
-NOT yet done / not verified:
+NOT yet done / not verified at the end of round 4 (status: see round 5 at the end of this file):
 - Full firmware compile: needs the Arduino ESP32 core, which this sandbox cannot download.
   `PoomDisplay.cpp` was syntax-checked against stubs. `MenuFunctions.cpp` was not checked.
+  -> round 5: PoomDisplay.cpp and LogStores.cpp are now compiled *and run* on the PC against a
+     fake I2C bus/panel/filesystem; MenuFunctions.cpp is covered by the static source checker.
 - The slide is not yet visually tested on the hardware. Watch for flicker and for frame rate.
+  -> round 5: `sh firmware/tools/render_preview.sh` renders the slide with the real driver;
+     frame rate is measured (20 fps paced, 28 ms per full frame). Flicker still needs a panel.
 - Button "OK" is wired to C_BTN (GPIO 25) and B to B_BTN (GPIO 26), using the upstream POOM editor logic.
+  -> round 5: checked (MenuFunctions.h declares `extern Switches b_btn` under MARAUDER_OLED128X64,
+     the .ino defines it, the editor uses it) plus pin-collision checks in test_board_config.cpp.
 - Slide RAM cost: two 1 KB buffers (2 KB total) in PoomDisplay.
+  -> round 5: 2 KB still, but for a different reason - the composed frame is now built one page
+     at a time in a 128-byte scratch, so the third 1 KB buffer is gone (was 3 KB).
+---
+
+## Round 5 — the verification round (what "complete" meant here)
+
+Round 4 left four items open. Three of them were "we could not check this", so this round
+built the machinery to check them, and the checking found four real bugs.
+
+`firmware/host_tests/run_tests.sh` runs everything below. It needs only g++ and python3 —
+no ESP32 toolchain, no hardware.
+
+### New: the firmware sources are now compiled and *executed* on the PC
+
+`host_tests/stubs/` is a small Arduino stand-in: `String`, `Print`, `PROGMEM`, GPIO, plus
+
+- `Wire.h` — a fake I2C bus that charges every transferred byte (8 data + 1 ACK bit) to a
+  shared **virtual clock** at the frequency the driver asked for. So "how long does a frame
+  take" is a measurement, not an estimate.
+- `PanelSim.h` — a software SSD1306/SH1106: it decodes commands (page set, column set) and
+  pixel writes into GDDRAM, so a test can assert what the panel would *show*.
+- `FS.h` / `SPIFFS.h` / `SD.h` — an in-memory volume per medium, with a capacity, a
+  "no card" state, a `fail_writes` switch and a switch for the `File::name()` difference
+  between ESP32 core 2.x (bare name) and 3.x (full path).
+
+That means `PoomDisplay.cpp` and `LogStores.cpp` are now built with `-Wall -Wextra` from the
+same files the ESP32 build compiles, and run against simulated hardware.
+
+| test | what it pins down |
+|---|---|
+| `test_display.cpp` (45 checks) | I2C opens on 21/22 at 400 kHz; panel off→init→on; a full frame is 1024 B in 64 chunks and costs **28 ms** of bus time; dirty-page flush sends 1 of 8 pages; a no-op redraw sends nothing; 30/20 fps pacing; forward slide moves the old page left while the new one enters from the right, back slide the other way; a re-triggered slide still settles; a NACKing/absent panel cannot hang boot or the loop |
+| `test_logstores.cpp` (49 checks) | boot record lands in `/logs/00000000.log`; rotation holds 256 KB in 8 × 32 KB; records that straddle a segment boundary are neither lost nor reordered; resume after a reboot appends instead of truncating; stray files in the log dir are ignored; works with bare names; SD mirroring; 5 % card reserve respected; a card smaller than one segment declines the SD log instead of half-adopting it; write failures are absorbed |
+| `test_board_config.cpp` (106 checks) | `configs.h` alone resolves to `MARAUDER_ESP32_OLED` + `MARAUDER_OLED128X64`; no pin is shared; no pin sits on flash (6–11), UART0 (1/3), a strapping pin or an input-only pin (34–39) used as a button; the C5-only feature flags stay off; 5 menu rows + 8 px status bar + 21 chars/line fit 128×64; `partitions.csv` sums into 4 MB without overlaps and leaves SPIFFS headroom over the log |
+| `tools/check_sources.py` | every `#if`/`#ifdef` in all 102 source files is balanced and every board macro it mentions actually exists (a typo silently deletes code instead of failing the build); every `tft.*()` call that is **live for this board** exists on `PoomDisplay` (TFT_eSPI has ~200 methods, the OLED driver implements the ~45 needed); every file that uses a symbol from `OledAnim/OledSlide/RotatingLog/LogStores/PoomDisplay` can see that header; exactly one board target is enabled |
+
+`tools/check_sources.py` is the piece that covers `MenuFunctions.cpp` and the other files no
+compiler here can reach (they need WiFi/NimBLE/AsyncWebServer headers). It is not a compiler
+and does not pretend to be — but it does catch the two mistakes that actually happened below.
+
+### Bugs found and fixed
+
+1. **`RotatingLog` doubled the first segment.** `rotate()` used one flag (`started_`) both for
+   "a segment is open" and "we have rotated once", so the *first* rotation advanced nothing:
+   segment 0 got 64 KB instead of 32 KB, and the log stayed one segment over its cap for the
+   life of the card — `resume()` trims by segment *count*, so it was never noticed. Round 4's
+   test missed it because by the time it checked sizes, segment 0 had rotated out. Fixed with
+   an explicit `have_cur_` + `advance()`; now covered at two levels (a fresh-log unit test and
+   the end-to-end 8 × 32 KB check).
+2. **`MenuFunctions.cpp` used `slideDirection()` without including `OledSlide.h`.** Found by
+   the checker, not by me being careful: round 4 had `beginSlide()` inline in `changeMenu()`
+   with a hand-written condition; moving that rule into the header (so it can be unit tested)
+   exposed the missing include. Arduino IDE compiles each `.cpp` separately, so this is
+   "fatal error: slideDirection was not declared" on the bench, and nothing in this sandbox
+   would have caught it.
+3. **Boot log used `%lu` with `millis()`** (`uint32_t` is `unsigned int` on xtensa too) —
+   `-Wformat` warning in the real build. Now cast explicitly.
+4. **`logSdCapBytes()` reported a card cap even when no SD log was created** (card too small
+   for one 64 KB segment), so the UI would promise a log that would never be written.
+   The cap is now only published when the log exists.
+
+### Behaviour changes worth knowing about
+
+- **Partial flushes.** The driver keeps one dirty bit per 8-row page instead of a single
+  `dirty_` flag. A menu cursor move or one text row is now 11 I2C transactions and ~3.5 ms
+  instead of 88 transactions and 28 ms. Redrawing identical pixels queues nothing at all,
+  which matters because the menus redraw every pass.
+- **Slide frames are composed page by page into a 128-byte scratch** instead of a second 1 KB
+  frame buffer, so the animation costs 2 KB of static RAM (framebuffer + snapshot), not 3 KB.
+  That closes round 4's "Slide RAM cost" item.
+- **Slide pacing is 20 fps** (`kSlideFrameIntervalMs = 50`) while a whole page slides, because
+  a full frame costs 28 ms of blocking I2C: at 30 fps the flush ate ~80 % of the main loop,
+  at 20 fps it is ~55 % (measured by `test_display.cpp`). Ordinary updates stay at 30 fps now
+  that they are 8× cheaper.
+- **Boot splash prints `HARDWARE_NAME`** ("ESP32 OLED") instead of the hard-coded "POOM" — the
+  one screen that tells you which build is in the flash.
+- **A second boot record** with the pins and the SD state, so a board that "does nothing" can be
+  diagnosed from the log: `boot: v1.18.0 ESP32 OLED` then
+  `boot: oled i2c 21/22 btn 13/14/17/16/25/26 sd log 16106127360 B`.
+- A slide interrupted by another slide now snaps to its target and slides from there (the old
+  code snapshotted the half-drawn composed frame). Key repeat through a menu chain looks sane.
+
+### Still open — needs the bench
+
+- **A full firmware build.** Not possible here (no `dl.espressif.com`). The board's own code is
+  now compiled and executed; `MenuFunctions.cpp`, `WiFiScan.cpp` and friends are only
+  structurally checked. Treat the first Arduino IDE compile as part of the test.
+- Real frame rate, tearing/flicker, button feel, key-repeat timing, NimBLE behaviour, and
+  whether the settings JSON still fits the 960 KB SPIFFS partition after a year of writes.
+- **Cosmetic, upstream, not fixed:** on a 128×64 panel `displayCurrentMenu()` draws the menu
+  title (banner) at y=8 and then paints the first menu row over it, so the title is never seen.
+  POOM behaves the same way. Either live with 5 rows and no title (current) or take
+  `BUTTON_SCREEN_LIMIT` down to 4 and start rows at y=18 to get the title back.
+- `NOTES.md` round 2's pin proposal had LEFT/RIGHT the other way round (16/17). `configs.h` and
+  `BUILD_ARDUINO_IDE.md` agree on **LEFT=17, RIGHT=16** and are the source of truth.

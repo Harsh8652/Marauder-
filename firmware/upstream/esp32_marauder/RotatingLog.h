@@ -39,13 +39,9 @@ class RotatingLog {
   bool resume(uint32_t oldest, uint32_t newest) {
     oldest_ = oldest;
     cur_ = newest;
+    have_cur_ = true;
     cur_used_ = seg_bytes_;  // force a new segment on the next write
-    started_ = true;
-    while (liveCount() > max_segs_) {
-      if (!store_.remove(oldest_)) return false;
-      oldest_++;
-    }
-    return true;
+    return trim();
   }
 
   // Append one record (a '\n' is added). Splits across segments without loss.
@@ -53,8 +49,8 @@ class RotatingLog {
     std::string rec = line + "\n";
     size_t off = 0;
     while (off < rec.size()) {
-      if (cur_used_ >= seg_bytes_) {
-        if (!rotate()) return false;
+      if (!have_cur_ || cur_used_ >= seg_bytes_) {
+        if (!advance()) return false;
       }
       size_t room = seg_bytes_ - cur_used_;
       size_t n = (rec.size() - off < room) ? rec.size() - off : room;
@@ -67,19 +63,34 @@ class RotatingLog {
 
   uint32_t oldest() const { return oldest_; }
   uint32_t newest() const { return cur_; }
-  uint32_t liveCount() const { return cur_ - oldest_ + 1; }
+  uint32_t liveCount() const { return have_cur_ ? (cur_ - oldest_ + 1) : 0; }
   uint32_t maxSegments() const { return max_segs_; }
 
  private:
-  bool rotate() {
-    // Starting a new segment: if the cap would be exceeded, drop the oldest first.
-    if (started_ && liveCount() >= max_segs_) {
+  // Open the next segment, making room first. `have_cur_` distinguishes "no segment has
+  // been written yet" from "segment 0 is open"; without it the very first advance() would
+  // keep writing into segment 0 and quietly double its size (and the total cap).
+  bool advance() {
+    if (!have_cur_) {
+      oldest_ = cur_;
+      have_cur_ = true;
+      cur_used_ = 0;
+      return true;
+    }
+    while (liveCount() + 1 > max_segs_) {
       if (!store_.remove(oldest_)) return false;
       oldest_++;
     }
-    if (started_) cur_++;
-    started_ = true;
+    cur_++;
     cur_used_ = 0;
+    return true;
+  }
+
+  bool trim() {
+    while (liveCount() > max_segs_) {
+      if (!store_.remove(oldest_)) return false;
+      oldest_++;
+    }
     return true;
   }
 
@@ -89,5 +100,5 @@ class RotatingLog {
   uint32_t oldest_ = 0;
   uint32_t cur_ = 0;
   size_t cur_used_ = 0;
-  bool started_ = false;
+  bool have_cur_ = false;
 };

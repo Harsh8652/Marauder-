@@ -4,6 +4,10 @@
 #include "OwnedListLifecycle.h"
 #include "lang_var.h"
 
+#ifdef MARAUDER_OLED128X64
+  #include "OledSlide.h"   // slideDirection(): the menu transition rule lives in a header
+#endif
+
 #ifdef HAS_SCREEN
 
 extern const unsigned char menu_icons[][66];
@@ -5217,13 +5221,15 @@ void MenuFunctions::changeMenu(Menu* menu, bool simple_change) {
     const bool leaving_sd_browser = current_menu == &sdDeleteMenu && menu != &sdDeleteMenu;
   #endif
 
-  // Animate real page changes only (not a refresh of the same menu).
-  // Back navigation passes the parent menu, so it is detected here as well.
+  // Animate real page changes only (not a refresh of the same menu). Back navigation
+  // passes the parent menu, so it is detected here as well. The rule itself lives in
+  // OledSlide.h so host_tests/test_slide.cpp can prove it.
   #ifdef MARAUDER_OLED128X64
-    if (menu != current_menu && current_menu != nullptr) {
-      const bool going_back = (current_menu->parentMenu == menu);
-      display_obj.tft.beginSlide(going_back ? -1 : 1);
-    }
+    const int slide_dir = slideDirection(menu != current_menu,
+                                         current_menu != nullptr,
+                                         current_menu && (current_menu->parentMenu == menu));
+    if (slide_dir != 0)
+      display_obj.tft.beginSlide(slide_dir);
   #endif
 
   if (!simple_change) {

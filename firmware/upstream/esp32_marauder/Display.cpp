@@ -296,7 +296,9 @@ void Display::drawBootSplash() {
     tft.setTextColor(TFT_WHITE, TFT_BLACK);
     tft.drawCentreString("ESP32 Marauder", width / 2, 10, 1);
     tft.drawCentreString(version_number, width / 2, 27, 1);
-    tft.drawCentreString("POOM", width / 2, 44, 1);
+    // HARDWARE_NAME, not "POOM": this code path also serves MARAUDER_ESP32_OLED, and the
+    // splash is the one screen that tells you which build is actually in the flash.
+    tft.drawCentreString(HARDWARE_NAME, width / 2, 44, 1);
     tft.display(true);
     return;
   #endif

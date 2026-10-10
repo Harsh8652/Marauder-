@@ -33,69 +33,71 @@ void PoomDisplay::init() {
   display(true);
 }
 
-void PoomDisplay::sendFrame(const uint8_t* buf) {
-  for (uint8_t page = 0; page < 8; ++page) {
-    command(0xB0 | page);
-    command(0x00 | (kColumnOffset & 0x0F));
-    command(0x10 | (kColumnOffset >> 4));
-    for (uint8_t chunk = 0; chunk < 8; ++chunk) {
-      Wire.beginTransmission(kAddress);
-      Wire.write(0x40);
-      Wire.write(buf + page * 128 + chunk * 16, 16);
-      Wire.endTransmission();
-    }
+void PoomDisplay::sendPage(int page, const uint8_t* row) {
+  command(0xB0 | page);
+  command(0x00 | (kColumnOffset & 0x0F));
+  command(0x10 | (kColumnOffset >> 4));
+  for (uint8_t chunk = 0; chunk < 8; ++chunk) {
+    Wire.beginTransmission(kAddress);
+    Wire.write(0x40);
+    Wire.write(row + chunk * 16, 16);
+    Wire.endTransmission();
   }
 }
 
 void PoomDisplay::beginSlide(int dir) {
-  // If a slide is already running, start from what is on screen right now.
-  const uint8_t* on_screen = sliding_ ? slide_frame_ : framebuffer_;
-  memcpy(slide_prev_, on_screen, sizeof(slide_prev_));
+  // The snapshot is the page the panel is showing, which is framebuffer_ unless another
+  // slide is mid-flight. A slide interrupted by a new one then snaps to its target and
+  // slides from there, which is what a menu key-repeat should look like.
+  memcpy(slide_prev_, framebuffer_, sizeof(slide_prev_));
   slide_dir_ = dir >= 0 ? 1 : -1;
   slide_start_ms_ = millis();
   sliding_ = true;
-  dirty_ = true;
+  last_flush_ms_ = 0;   // draw the first slide frame on the next display() call
+  page_dirty_ = 0xFF;   // the slide overwrites the panel, so repaint fully afterwards
 }
 
 void PoomDisplay::display(bool force) {
+  const uint32_t now = millis();
   if (sliding_) {
-    const uint32_t now = millis();
     const uint32_t elapsed = now - slide_start_ms_;
-    if (elapsed >= kSlideDurationMs) {
-      // Last frame is the plain new page; finish and fall through to a normal flush.
-      sliding_ = false;
-      dirty_ = true;
-    } else {
-      if (!force && now - last_flush_ms_ < 33) return;   // ~30 fps cap
+    if (!force && now - last_flush_ms_ < kSlideFrameIntervalMs) return;
+    if (elapsed < kSlideDurationMs) {
       // Shift = how far the old page has moved. slideOffset() is the new page's offset.
       const int off = slideOffset(128, elapsed, kSlideDurationMs, slide_dir_);
       const int shift = 128 - (off < 0 ? -off : off);
-      if (slide_dir_ > 0) composeSlide(slide_frame_, slide_prev_, framebuffer_, shift);
-      else                composeSlideBack(slide_frame_, slide_prev_, framebuffer_, shift);
-      sendFrame(slide_frame_);
+      for (uint8_t page = 0; page < 8; ++page) {
+        composePage(page_scratch_, slide_prev_ + page * 128, framebuffer_ + page * 128,
+                    shift, slide_dir_ > 0);
+        sendPage(page, page_scratch_);
+      }
       last_flush_ms_ = now;
       return;
     }
+    // Slide over: the pages still owed are the full new page, flushed below.
+    sliding_ = false;
   }
-  if (!dirty_ && !force) return;
-  const uint32_t now = millis();
-  if (!force && now - last_flush_ms_ < 33) return;
-  sendFrame(framebuffer_);
-  dirty_ = false;
+  if (!page_dirty_ && !force) return;
+  if (!force && now - last_flush_ms_ < kFrameIntervalMs) return;
+  for (uint8_t page = 0; page < 8; ++page)
+    if (page_dirty_ & (1U << page)) sendPage(page, framebuffer_ + page * 128);
+  page_dirty_ = 0;
   last_flush_ms_ = now;
 }
 
 void PoomDisplay::fillScreen(uint16_t color) {
   memset(framebuffer_, white(color) ? 0xFF : 0x00, sizeof(framebuffer_));
-  dirty_ = true;
+  page_dirty_ = 0xFF;
 }
 
 void PoomDisplay::drawPixel(int32_t x, int32_t y, uint16_t color) {
   if (x < 0 || x >= 128 || y < 0 || y >= 64) return;
   uint8_t &cell = framebuffer_[x + (y >> 3) * 128];
   const uint8_t mask = 1U << (y & 7);
-  if (white(color)) cell |= mask; else cell &= ~mask;
-  dirty_ = true;
+  const uint8_t value = white(color) ? (cell | mask) : (cell & ~mask);
+  if (value == cell) return;              // same pixels: nothing owed to the panel
+  cell = value;
+  page_dirty_ |= static_cast<uint8_t>(1U << (y >> 3));
 }
 
 void PoomDisplay::drawFastHLine(int32_t x, int32_t y, int32_t w, uint16_t color) {

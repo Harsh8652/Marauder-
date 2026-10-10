@@ -43,6 +43,8 @@ class PoomDisplay : public Print {
  public:
   PoomDisplay();
   void init();
+  // Push every page drawn since the last call, at most once per kFrameIntervalMs
+  // (kSlideFrameIntervalMs while a slide runs). Safe to call every main-loop pass.
   void display(bool force = false);
   // Page transitions. Call beginSlide() BEFORE drawing the new page: it snapshots the
   // page currently on screen. dir > 0 = forward (new page enters from the right),
@@ -50,6 +52,8 @@ class PoomDisplay : public Print {
   // automatically for kSlideDurationMs without blocking the main loop.
   void beginSlide(int dir);
   bool sliding() const { return sliding_; }
+  // Pages the panel still has to be told about (8 = full repaint). Used by the tests.
+  uint8_t dirtyPages() const { return page_dirty_; }
   void fillScreen(uint16_t color);
   void drawPixel(int32_t x, int32_t y, uint16_t color);
   void drawFastHLine(int32_t x, int32_t y, int32_t w, uint16_t color);
@@ -89,11 +93,14 @@ class PoomDisplay : public Print {
  private:
   uint8_t framebuffer_[1024];
   uint8_t slide_prev_[1024];   // page on screen when the slide started
-  uint8_t slide_frame_[1024];  // composed frame sent to the OLED during the slide
+  // Scratch for one composed slide page. The slide frames are pushed to the panel
+  // page by page straight out of here, so the driver never needs a second 1 KB frame
+  // buffer - this keeps the animation at 2 KB of static RAM instead of 3 KB.
+  uint8_t page_scratch_[128];
   bool sliding_ = false;
   int slide_dir_ = 1;
   uint32_t slide_start_ms_ = 0;
-  void sendFrame(const uint8_t* buf);
+  void sendPage(int page, const uint8_t* row);
   int16_t cursor_x_ = 0;
   int16_t cursor_y_ = 0;
   uint16_t text_fg_ = TFT_WHITE;
@@ -102,7 +109,7 @@ class PoomDisplay : public Print {
   uint8_t rotation_ = 0;
   bool wrap_x_ = true;
   bool wrap_y_ = false;
-  bool dirty_ = false;
+  uint8_t page_dirty_ = 0;   // one bit per 8-row page; 0xFF = repaint everything
   uint32_t last_flush_ms_ = 0;
   void command(uint8_t value);
   void drawChar(int16_t x, int16_t y, uint8_t c, uint16_t fg, uint16_t bg, uint8_t size);

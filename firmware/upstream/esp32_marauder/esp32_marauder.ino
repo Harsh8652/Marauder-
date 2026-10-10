@@ -362,10 +362,19 @@ void setup()
     #endif
   #endif
 
-  // Persistent logs: internal 256 KB always; SD (if present) capped at its full size.
+  // Persistent logs: internal 256 KB always; SD (if present) capped at the card minus 5%.
   #ifdef MARAUDER_OLED128X64
     logInit();
     marauderLog("boot", MARAUDER_VERSION " " HARDWARE_NAME);
+    // One line with everything needed to debug a build over email: which pins the display
+    // and buttons landed on, and whether the log has a card to rotate onto.
+    {
+      char info[128];
+      snprintf(info, sizeof(info), "oled i2c %d/%d btn %d/%d/%d/%d/%d/%d sd %s %llu B",
+               OLED_SDA, OLED_SCL, U_BTN, D_BTN, L_BTN, R_BTN, C_BTN, B_BTN,
+               logSdPresent() ? "log" : "none", (unsigned long long)logSdCapBytes());
+      marauderLog("boot", info);
+    }
   #endif
 
   wifi_scan_obj.RunSetup();

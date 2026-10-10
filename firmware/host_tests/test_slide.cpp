@@ -33,6 +33,31 @@ int main() {
   assert(last == 128 || last >= 120);                  // reaches (near) the end
   assert(frames >= 9);                                 // ~10 frames at 30 fps
   std::printf("ok slide: %d frames at 30 fps over %u ms, endpoints exact\n", frames, (unsigned)kSlideDurationMs);
+
+  // When is a transition worth animating at all? Same-menu refreshes must stay still,
+  // the first page has nothing to slide away, and going up slides the other way.
+  assert(slideDirection(false, true, false) == 0);   // refresh of the current menu
+  assert(slideDirection(true, false, false) == 0);   // first page after boot
+  assert(slideDirection(false, false, false) == 0);  // nothing at all
+  assert(slideDirection(true, true, false) == 1);    // into a submenu: forward
+  assert(slideDirection(true, true, true) == -1);    // to the parent: back
+  // The direction feeds the compositor, so check the two ends agree on its meaning.
+  {
+    uint8_t a[1024], b[1024], f[1024];
+    memset(a, 0x0F, sizeof(a));
+    memset(b, 0xF0, sizeof(b));
+    for (uint32_t t = 0; t <= kSlideDurationMs; t += frameIntervalMs(30)) {
+      const int off = slideOffset(128, t, kSlideDurationMs, slideDirection(true, true, false));
+      const int shift = 128 - (off < 0 ? -off : off);
+      composeSlide(f, a, b, shift);
+      assert(f[0] == (shift < 128 ? a[shift] : b[0]));
+      const int off_back = slideOffset(128, t, kSlideDurationMs, slideDirection(true, true, true));
+      assert(off_back <= 0);
+      composeSlideBack(f, a, b, 128 - (-off_back));
+      assert(f[127] == (shift < 128 ? a[127 - shift] : b[127]));
+    }
+  }
+  std::printf("ok slide: animate/skip and forward/back rule matches the compositor\n");
   std::printf("ALL PASSED\n");
 }
 
