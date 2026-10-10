@@ -1,8 +1,11 @@
+#include "configs.h"   // board select + OLED_SDA/OLED_SCL; Arduino IDE has no global -D flags
 #include "PoomDisplay.h"
 
 #ifdef MARAUDER_OLED128X64
 
 #include "PoomFont.h"
+#include "OledAnim.h"
+#include "OledSlide.h"
 
 namespace {
 constexpr uint8_t kAddress = 0x3C;
@@ -30,10 +33,7 @@ void PoomDisplay::init() {
   display(true);
 }
 
-void PoomDisplay::display(bool force) {
-  if (!dirty_ && !force) return;
-  const uint32_t now = millis();
-  if (!force && now - last_flush_ms_ < 33) return;
+void PoomDisplay::sendFrame(const uint8_t* buf) {
   for (uint8_t page = 0; page < 8; ++page) {
     command(0xB0 | page);
     command(0x00 | (kColumnOffset & 0x0F));
@@ -41,10 +41,46 @@ void PoomDisplay::display(bool force) {
     for (uint8_t chunk = 0; chunk < 8; ++chunk) {
       Wire.beginTransmission(kAddress);
       Wire.write(0x40);
-      Wire.write(framebuffer_ + page * 128 + chunk * 16, 16);
+      Wire.write(buf + page * 128 + chunk * 16, 16);
       Wire.endTransmission();
     }
   }
+}
+
+void PoomDisplay::beginSlide(int dir) {
+  // If a slide is already running, start from what is on screen right now.
+  const uint8_t* on_screen = sliding_ ? slide_frame_ : framebuffer_;
+  memcpy(slide_prev_, on_screen, sizeof(slide_prev_));
+  slide_dir_ = dir >= 0 ? 1 : -1;
+  slide_start_ms_ = millis();
+  sliding_ = true;
+  dirty_ = true;
+}
+
+void PoomDisplay::display(bool force) {
+  if (sliding_) {
+    const uint32_t now = millis();
+    const uint32_t elapsed = now - slide_start_ms_;
+    if (elapsed >= kSlideDurationMs) {
+      // Last frame is the plain new page; finish and fall through to a normal flush.
+      sliding_ = false;
+      dirty_ = true;
+    } else {
+      if (!force && now - last_flush_ms_ < 33) return;   // ~30 fps cap
+      // Shift = how far the old page has moved. slideOffset() is the new page's offset.
+      const int off = slideOffset(128, elapsed, kSlideDurationMs, slide_dir_);
+      const int shift = 128 - (off < 0 ? -off : off);
+      if (slide_dir_ > 0) composeSlide(slide_frame_, slide_prev_, framebuffer_, shift);
+      else                composeSlideBack(slide_frame_, slide_prev_, framebuffer_, shift);
+      sendFrame(slide_frame_);
+      last_flush_ms_ = now;
+      return;
+    }
+  }
+  if (!dirty_ && !force) return;
+  const uint32_t now = millis();
+  if (!force && now - last_flush_ms_ < 33) return;
+  sendFrame(framebuffer_);
   dirty_ = false;
   last_flush_ms_ = now;
 }

@@ -19,6 +19,8 @@ constexpr uint32_t kInternalSegs = 8;
 
 // SD log: 64 KB segments. Cap is computed from the card at boot.
 constexpr size_t kSdSegBytes = 64 * 1024;
+// Keep this share of the card free so FAT has room for writes near the cap.
+constexpr unsigned kSdReservePercent = 5;
 
 constexpr const char* kInternalDir = "/logs";
 constexpr const char* kSdDir = "/marauder_logs";
@@ -112,7 +114,7 @@ void logInit() {
   // SD log (optional). The cap is the card's real volume size, all of it (no reserve).
   if (SD.cardType() != CARD_NONE) {
     gSdCap = SD.totalBytes();
-    uint32_t maxSegs = computeMaxSegments(gSdCap, kSdSegBytes, 0);
+    uint32_t maxSegs = computeMaxSegments(gSdCap, kSdSegBytes, kSdReservePercent);
     if (maxSegs > 0) {
       gSdStore = new FsLogStore(SD, kSdDir);
       gSd = new RotatingLog(*gSdStore, kSdSegBytes, maxSegs);

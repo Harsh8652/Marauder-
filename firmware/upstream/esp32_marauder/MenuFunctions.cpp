@@ -5217,10 +5217,23 @@ void MenuFunctions::changeMenu(Menu* menu, bool simple_change) {
     const bool leaving_sd_browser = current_menu == &sdDeleteMenu && menu != &sdDeleteMenu;
   #endif
 
+  // Animate real page changes only (not a refresh of the same menu).
+  // Back navigation passes the parent menu, so it is detected here as well.
+  #ifdef MARAUDER_OLED128X64
+    if (menu != current_menu && current_menu != nullptr) {
+      const bool going_back = (current_menu->parentMenu == menu);
+      display_obj.tft.beginSlide(going_back ? -1 : 1);
+    }
+  #endif
+
   if (!simple_change) {
     //display_obj.initScrollValues();
     //display_obj.setupScrollArea(TOP_FIXED_AREA, BOT_FIXED_AREA);
-    display_obj.init();
+    // On the OLED, init() re-runs the panel init and clears the screen, which would
+    // flash on every menu change. Only the TFT needs it.
+    #ifndef MARAUDER_OLED128X64
+      display_obj.init();
+    #endif
 
     #ifdef HAS_ILI9341
       extern void backlightOn();

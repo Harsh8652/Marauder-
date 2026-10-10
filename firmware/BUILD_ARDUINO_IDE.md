@@ -54,8 +54,11 @@ Power the OLED and SD card from 3.3 V. Do not connect GPIOs 0, 1, 3, 6–11, or 
 
 ## 6. Logs
 - Internal log: 8 × 32 KB segments in SPIFFS (256 KB). Always on.
-- SD log (only if a card is present): cap = the card's full volume size, read at boot
-  (`SD.totalBytes()`), split into 64 KB files under `/marauder_logs`.
+- SD log (only if a card is present): cap = the card's volume size read at boot
+  (`SD.totalBytes()`) minus a 5% reserve, split into 64 KB files under `/marauder_logs`.
+  The reserve keeps free space so writes don't fail near full.
 - When the cap is reached, the oldest segment is deleted before a new one is written.
-- A 100% cap means the card will be completely full of logs. FAT needs a little free space,
-  so writes may fail near the limit. Tell me if you want a reserve percentage (it is one constant).
+
+## 7. Menu animation
+Menus slide on page changes: forward navigation slides in from the right, back navigation from
+the left (about 300 ms). The animation runs in the display flush and does not block the main loop.

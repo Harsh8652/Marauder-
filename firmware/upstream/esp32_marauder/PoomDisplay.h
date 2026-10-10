@@ -44,6 +44,12 @@ class PoomDisplay : public Print {
   PoomDisplay();
   void init();
   void display(bool force = false);
+  // Page transitions. Call beginSlide() BEFORE drawing the new page: it snapshots the
+  // page currently on screen. dir > 0 = forward (new page enters from the right),
+  // dir < 0 = back (new page enters from the left). display() then animates
+  // automatically for kSlideDurationMs without blocking the main loop.
+  void beginSlide(int dir);
+  bool sliding() const { return sliding_; }
   void fillScreen(uint16_t color);
   void drawPixel(int32_t x, int32_t y, uint16_t color);
   void drawFastHLine(int32_t x, int32_t y, int32_t w, uint16_t color);
@@ -82,6 +88,12 @@ class PoomDisplay : public Print {
 
  private:
   uint8_t framebuffer_[1024];
+  uint8_t slide_prev_[1024];   // page on screen when the slide started
+  uint8_t slide_frame_[1024];  // composed frame sent to the OLED during the slide
+  bool sliding_ = false;
+  int slide_dir_ = 1;
+  uint32_t slide_start_ms_ = 0;
+  void sendFrame(const uint8_t* buf);
   int16_t cursor_x_ = 0;
   int16_t cursor_y_ = 0;
   uint16_t text_fg_ = TFT_WHITE;

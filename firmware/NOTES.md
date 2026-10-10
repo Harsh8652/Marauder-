@@ -126,11 +126,20 @@ Tests on this PC (g++, all pass):
 - `host_tests/test_core.cpp`: rotation and easing.
 - `LogStores.cpp` syntax-checked against stub Arduino headers (found and fixed a missing `<cstring>`).
 
+Round 4 changes:
+- SD log cap now keeps a 5% reserve (`kSdReservePercent` in `LogStores.cpp`).
+- Slide animation is wired into the menus:
+  - `PoomDisplay::beginSlide(dir)` snapshots the page on screen. `display()` composes frames from the
+    old page and the new page for `kSlideDurationMs` (300 ms), at ~30 fps, without blocking.
+  - `MenuFunctions::changeMenu()` calls it on real page changes: forward for a new menu, back when the
+    target is the parent menu. Same-menu refreshes do not animate.
+  - On the OLED, `changeMenu()` no longer calls `display_obj.init()`, because that clears the screen.
+- `PoomDisplay.cpp` now includes `configs.h`. Without it, Arduino IDE builds would miss `OLED_SDA/SCL`
+  and the whole file (upstream CI avoids this by passing the board as a `-D` flag).
+
 NOT yet done / not verified:
 - Full firmware compile: needs the Arduino ESP32 core, which this sandbox cannot download.
-  Expect some compile fixes on first build; send me the errors.
-- Slide animation is NOT wired into the menus yet. The math is ready. Next step is to hook it into
-  the menu page change path in `MenuFunctions.cpp`, using `composeSlide` at the flush point.
-- Slide duration: at 200 ms there are only ~7 frames at 30 fps (too choppy). Plan 300 ms (~10 frames).
+  `PoomDisplay.cpp` was syntax-checked against stubs. `MenuFunctions.cpp` was not checked.
+- The slide is not yet visually tested on the hardware. Watch for flicker and for frame rate.
 - Button "OK" is wired to C_BTN (GPIO 25) and B to B_BTN (GPIO 26), using the upstream POOM editor logic.
-- SD cap at 100% can make writes fail near full. Add a reserve constant if that happens.
+- Slide RAM cost: two 1 KB buffers (2 KB total) in PoomDisplay.

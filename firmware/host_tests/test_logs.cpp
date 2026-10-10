@@ -55,6 +55,8 @@ static void testCapFromCardSize() {
   uint32_t n = computeMaxSegments(sixteenGB, 64 * 1024, 0);
   assert(n == sixteenGB / (64 * 1024));
   assert(computeMaxSegments(sixteenGB, 64 * 1024, 10) < n);   // reserve reduces cap
+  // 5% reserve (what the SD log uses): 95% of the card, rounded down to whole segments.
+  assert(computeMaxSegments(sixteenGB, 64 * 1024, 5) == (sixteenGB * 95 / 100) / (64 * 1024));
   assert(computeMaxSegments(0, 64 * 1024, 0) == 0);
   assert(computeMaxSegments(1000, 0, 0) == 0);
   std::printf("ok cap: 16 GB -> %u segments of 64 KB (all of card)\n", n);
