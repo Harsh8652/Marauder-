@@ -162,21 +162,21 @@ def header_symbols(path: str) -> set[str]:
     """
     names = set()
     depth = 0
+    skip = {"if", "for", "while", "return", "sizeof", "defined", "switch", "catch"}
     for line in read(path).splitlines():
-        at_zero = depth == 0
         stripped = line.strip()
-        if at_zero and stripped and not stripped.startswith(("//", "*", "#")):
+        if depth == 0 and stripped and not stripped.startswith(("//", "*", "#", "public", "private", "protected")):
             m = re.search(r"\b(?:class|struct)\s+([A-Za-z_]\w*)", stripped)
             if m:
                 names.add(m.group(1))
-            m = re.match(r"(?:inline|constexpr|static|extern)?[\w :*&<>]*?\b([A-Za-z_]\w*)\s*\([^;]*\)\s*[;{]?", stripped)
-            if m and "(" in stripped:
-                name = m.group(1)
-                if name not in ("if", "for", "while", "return", "sizeof", "defined"):
-                    names.add(name)
+            m = re.search(r"\bconstexpr\s+[\w:]+\s+([A-Za-z_]\w*)\s*=", stripped)
+            if m:
+                names.add(m.group(1))
+            m = re.match(r"[A-Za-z_][\w :*&<>,.]*?\b([A-Za-z_]\w*)\s*\(", stripped)
+            if m and m.group(1) not in skip:
+                names.add(m.group(1))
         depth += line.count("{") - line.count("}")
         depth = max(depth, 0)
-    # A class body also declares its own name; keep the type plus the free functions only.
     return names
 
 
